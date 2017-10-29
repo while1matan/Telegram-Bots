@@ -6,3 +6,7 @@ My Bots:
 - [2Gif](https://telegram.me/w1_gif_bot)
 - [MathFormula](https://telegram.me/w1_math_bot)
 - [FuelPricesIL](https://telegram.me/w1_fuel_bot)
+
+Others Bots:
+- [Random Things Picker](https://telegram.me/w1_pick_bot) (by [Asaf](https://github.com/amnonya))
+- [Yes No](https://telegram.me/w1bibot) (by [Asaf](https://github.com/amnonya))
