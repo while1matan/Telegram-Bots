@@ -9,4 +9,4 @@ My Bots:
 
 Others Bots:
 - [Random Things Picker](https://telegram.me/w1_pick_bot) (by [Asaf](https://github.com/amnonya))
-- [Yes No](https://telegram.me/w1bibot) (by [Asaf](https://github.com/amnonya))
+- [Yes No](https://telegram.me/w1_yes_no_bot) (by [Asaf](https://github.com/amnonya))
