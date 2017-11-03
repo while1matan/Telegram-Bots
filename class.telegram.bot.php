@@ -1,10 +1,14 @@
 <?php
 
+error_reporting(-1);
+header('Content-Type: text/html; charset=utf-8');
+
 class TelegramBot {
 	
-	private $botToken	= "";
-	public $apiUrl		= "https://api.telegram.org/bot";
-	public $apiFilesUrl	= "https://api.telegram.org/file/bot";
+	private $botToken		= "";
+	private $botName		= "";
+	private $apiUrl			= "https://api.telegram.org/bot";
+	private $apiFilesUrl	= "https://api.telegram.org/file/bot";
 	
 	private $debug		= false;
 	private $savePath	= "";
@@ -17,16 +21,19 @@ class TelegramBot {
 	private $currentChatId	= null;		// chat identifier for last incoming message
 	private $currentUpdate	= null;		// last update data
 	
+	private $cacheUpdateId	= 60*60*24;
+	
 	// INITIATE THIS CLASS
-	public function __construct($token , $uniqueName = null) {
+	public function __construct($token , $botName) {
+		$this->registerErrorsHandlers();
+		
 		$this->botToken		= $token;
 		$this->apiUrl		.= $this->botToken . '/';
 		$this->apiFilesUrl	.= $this->botToken . '/';
 		
-		if(is_string($uniqueName)){
-			$this->logFile = "{$uniqueName}.log";
-			$this->uidFile = "{$uniqueName}.updateid";
-		}
+		$this->botName = $botName;
+		$this->logFile = "{$botName}.log";
+		$this->uidFile = "{$botName}.updateid";
 		
 		$this->createCurl();
 	}
@@ -34,6 +41,52 @@ class TelegramBot {
 	// KILL THIS CLASS
 	public function __destruct(){
 		$this->destroyCurl();
+	}
+	
+	// HANDLE SCRIPT ERRORS
+	private function registerErrorsHandlers(){
+		set_error_handler([$this , 'error_handler']);
+		register_shutdown_function([$this , 'script_shutdown']);
+	}
+	
+	// CAPTURE ERRORS
+	public function error_handler($code, $message, $file, $line){
+		// error suppressed with @
+		if(error_reporting() == 0 || ini_get('error_reporting') == 0) {
+			return false;
+		}
+		$this->errorLog($code , $message , $file , $line);
+	}
+	
+	// CAPTURE SCRIPT-SHUTDOWN EVENT
+	public function script_shutdown(){
+		$error = error_get_last();
+		if(isset($error['type'])) {
+			$this->errorLog($error['type'] , $error['message'] , $error['file'] , $error['line']);
+		}
+	}
+	
+	// SAVE ERROR DATA TO LOG FILE
+	private function errorLog($code , $msg , $file , $line){
+		switch ($code) {
+			case E_NOTICE:
+			case E_USER_NOTICE:
+				$error_level = "Notice";
+				break;
+			case E_WARNING:
+			case E_USER_WARNING:
+				$error_level = "Warning";
+				break;
+			case E_ERROR:
+			case E_USER_ERROR:
+				$error_level = "Fatal Error";
+				break;
+			default:
+				$error_level = "Unknown";
+				break;
+		}
+		
+		$this->log("\nPHP> {$error_level}: {$msg} in {$file} on line {$line}\n" , true);
 	}
 	
 	// SET/GET DEBUG MODE
@@ -71,8 +124,8 @@ class TelegramBot {
 	}
 	
 	// KEEP LOG
-	private function log($msg){
-		if($this->debug){
+	private function log($msg , $force_log = false){
+		if($this->debug || $force_log){
 			$date = date("d/m/y H:i:s");
 			file_put_contents($this->savePath . $this->logFile , "[{$date}] {$msg}\n" , FILE_APPEND | LOCK_EX);
 		}
@@ -147,6 +200,14 @@ class TelegramBot {
 		return $responseArr['result'];
 	}
 	
+	// RESTRICT ACCESS TO THIS PAGE WITHOUT secret GET PARAMETER
+	public function restrictAccess($secret_str){
+		if(!isset($_GET['secret']) || $_GET['secret'] !== $secret_str){
+			header('HTTP/1.0 403 Forbidden');
+			exit();
+		}
+	}
+	
 	// SET WEBHOOK
 	public function setWebhook($url){
 		return $this->method("setWebhook" , ["url" => $url] , true);
@@ -155,6 +216,14 @@ class TelegramBot {
 	// CLEAR WEBHOOK
 	public function unsetWebhook(){
 		return $this->setWebhook("");
+	}
+	
+	// CHECK IF CURRENT REQUEST IS FOR (UN)SETTING WEBHOOK
+	public function handleWebhook($webhook_url){
+		if(isset($_GET['webhook'])){
+			print_r( ($_GET['webhook'] == "remove")? $this->unsetWebhook() : $this->setWebhook($webhook_url) );
+			exit();
+		}
 	}
 	
 	// RECEIVE NEW UPDATE FROM TELEGRAM
@@ -197,7 +266,9 @@ class TelegramBot {
 			
 			$this->log("CHECKING UPDATE-ID: {$update_id}");
 			
-			if(file_exists($this->savePath . $this->uidFile)){
+			if(	file_exists($this->savePath . $this->uidFile) &&
+				filemtime($this->savePath . $this->uidFile) >= time() - $this->cacheUpdateId
+			){
 				$last_update_id = (int)file_get_contents($this->savePath . $this->uidFile);
 				$is_new = ($update_id > $last_update_id);
 			}
@@ -230,7 +301,6 @@ class TelegramBot {
 	// CHECK IF SPECIFIC TYPE OF UPDATE IS AVAILABLE
 	// if $returnUpdate is present, it'll get the update-data
 	public function has($updateType , &$returnUpdate = false){
-
 		if(isset($this->currentUpdate[ $updateType ])){
 			if($returnUpdate !== false){
 				$returnUpdate = $this->currentUpdate[ $updateType ];
@@ -262,12 +332,12 @@ class TelegramBot {
 	
 	// FIND COMMAND IN LAST UPDATE-MESSAGE
 	// COMMANDS INFORMATION : https://core.telegram.org/bots#commands
-	public function findCommand($botUserName , &$returnCmd = false , &$returnArgs = false){
+	public function findCommand(&$returnCmd = false , &$returnArgs = false){
 		
 		if(isset($this->currentUpdate['message']['text'])){
 			$text = trim($this->currentUpdate['message']['text']);
 			
-			$username = strtolower('@' . $botUserName);
+			$username = strtolower('@' . $this->botName);
 			$username_len = strlen($username);
 
 			// if text starts with bot-username mention, remove it
@@ -307,49 +377,46 @@ class TelegramBot {
 		return new CURLFile( realpath($path) );
 	}
 	
-	// CREATE NEW KEYBOARD ARRAY
-	//	>keyboard : array of button rows
-	//	>current_row : last row of keyboard
-	public function newKeyboard(){
-		return [
-			"keyboard"		=> [],
-			"current_row"	=> -1
-		];
+	// CREATE NEW KEYBOARD OBJECT
+	public function newInlineKeyboard(){
+		return new InlineKeyboard();
+	}
+}
+
+// ----------------------------------
+//	TELEGRAM INLINE KEYBOARD OBJECT
+// ----------------------------------
+class InlineKeyboard {
+	private $markup = [];
+	private $current_row = -1;
+	
+	public function addRow(){
+		return ++$this->current_row;
 	}
 	
-	// ADD NEW ROW TO KEYBOARD
-	// return: new row-id
-	public function newKeyboardRow(&$keyboard){		
-		return ++$keyboard['current_row'];
-	}
-	
-	// ADD NEW BUTTON TO KEYBOARD
-	// return: button data
-	// https://core.telegram.org/bots/api#inlinekeyboardbutton
-	public function newInlineKeyboardButton(&$keyboard , $text , $url = "" , $callback_data = "" , $switch_inline_query = ""){
-		
+	public function addButton($text , $url = false , $callback_data = false , $switch_inline_query = false , $switch_inline_query_current_chat = false){
 		$button_data = [
 			"text" => $text
 		];
 		
 		// telegram api: must use exactly one of the optional fields
-        if($url != ""){
+        if(is_string($url) && $url !== ""){
 			$button_data['url'] = $url;
-		} else if ($callback_data != ""){
+		} else if (is_string($callback_data) && $callback_data !== ""){
 			$button_data['callback_data'] = $callback_data;
-		} else if ($switch_inline_query != ""){
+		} else if (is_string($switch_inline_query)){
 			$button_data['switch_inline_query'] = $switch_inline_query;
+		} else if (is_string($switch_inline_query_current_chat)){
+			$button_data['switch_inline_query_current_chat'] = $switch_inline_query_current_chat;
 		}
 		
-		$keyboard['keyboard'][ $keyboard['current_row'] ][] = $button_data;
+		$this->markup[ $this->current_row ][] = $button_data;
 		
 		return $button_data;
 	}
 	
-	// GET KEYBOARD DATA
-	public function getKeyboardMarkup(&$keyboard){
-		//$this->log(print_r($keyboard['keyboard'], true));
-		return $keyboard['keyboard'];
+	public function getMarkup(){
+		return $this->markup;
 	}
 }
 
